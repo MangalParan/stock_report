@@ -568,37 +568,136 @@ def generate_html_report(analysis_list, report_data):
     </div>
     
     <script>
+        const isStaticHost = location.hostname.includes('github.io') || location.protocol === 'file:';
+        const GITHUB_OWNER = 'MangalParan';
+        const GITHUB_REPO = 'stock_report';
+        const WORKFLOW_FILE = 'refresh-data.yml';
         let refreshInProgress = false;
         let progressUpdateInterval = null;
-        
+
+        function getGitHubToken() {{
+            return localStorage.getItem('gh_pat') || '';
+        }}
+
+        function promptForToken() {{
+            const token = prompt(
+                'Enter your GitHub Personal Access Token (PAT) with "Actions: write" permission.\\n\\n' +
+                'Create one at: https://github.com/settings/tokens?type=beta\\n' +
+                'Select repo: ' + GITHUB_OWNER + '/' + GITHUB_REPO + '\\n' +
+                'Permission needed: Actions → Read and write\\n\\n' +
+                'The token is stored only in your browser (localStorage).'
+            );
+            if (token && token.trim()) {{
+                localStorage.setItem('gh_pat', token.trim());
+                return token.trim();
+            }}
+            return null;
+        }}
+
+        async function triggerWorkflow(token) {{
+            const url = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/dispatches';
+            const resp = await fetch(url, {{
+                method: 'POST',
+                headers: {{
+                    'Authorization': 'Bearer ' + token,
+                    'Accept': 'application/vnd.github+json'
+                }},
+                body: JSON.stringify({{ ref: 'main' }})
+            }});
+            if (resp.status === 204) return true;
+            if (resp.status === 401 || resp.status === 403) {{
+                localStorage.removeItem('gh_pat');
+                throw new Error('Invalid or expired token. Please try again.');
+            }}
+            const err = await resp.json().catch(() => ({{}}));
+            throw new Error(err.message || 'Failed to trigger workflow (HTTP ' + resp.status + ')');
+        }}
+
+        async function pollWorkflowRun(token) {{
+            const listUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/runs?per_page=1';
+            const headers = {{ 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' }};
+            await new Promise(r => setTimeout(r, 4000));
+            for (let i = 0; i < 120; i++) {{
+                const resp = await fetch(listUrl, {{ headers }});
+                if (!resp.ok) throw new Error('Failed to check workflow status');
+                const data = await resp.json();
+                const run = data.workflow_runs && data.workflow_runs[0];
+                if (!run) {{ await new Promise(r => setTimeout(r, 5000)); continue; }}
+                if (run.status === 'completed') {{
+                    if (run.conclusion === 'success') return 'success';
+                    throw new Error('Workflow finished with: ' + run.conclusion);
+                }}
+                let pct = 10;
+                if (run.status === 'in_progress') pct = 50;
+                if (run.status === 'queued') pct = 5;
+                document.getElementById('progressFill').style.width = pct + '%';
+                document.getElementById('progressPercent').textContent = pct + '%';
+                document.getElementById('progressStatus').textContent = 'Workflow ' + run.status + '...';
+                await new Promise(r => setTimeout(r, 5000));
+            }}
+            throw new Error('Workflow timed out');
+        }}
+
         async function refreshData() {{
+            if (!isStaticHost) {{
+                // Local server mode
+                if (refreshInProgress) return;
+                refreshInProgress = true;
+                const btn = document.getElementById('refreshBtn');
+                const container = document.getElementById('progressContainer');
+                btn.disabled = true;
+                container.classList.add('active');
+                document.getElementById('progressFill').style.width = '0%';
+                document.getElementById('progressPercent').textContent = '0%';
+                document.getElementById('progressStatus').textContent = 'Starting refresh...';
+                try {{
+                    const response = await fetch('/refresh-data', {{method: 'POST'}});
+                    if (!response.ok) throw new Error('Failed to start refresh');
+                    updateLocalProgress();
+                    progressUpdateInterval = setInterval(updateLocalProgress, 500);
+                }} catch (error) {{
+                    document.getElementById('progressStatus').textContent = 'Error: ' + error.message;
+                    btn.disabled = false;
+                    refreshInProgress = false;
+                    if (progressUpdateInterval) clearInterval(progressUpdateInterval);
+                }}
+                return;
+            }}
+
+            // GitHub Pages mode
             if (refreshInProgress) return;
-            
+            let token = getGitHubToken();
+            if (!token) {{ token = promptForToken(); if (!token) return; }}
+
             refreshInProgress = true;
             const btn = document.getElementById('refreshBtn');
             const container = document.getElementById('progressContainer');
-            
             btn.disabled = true;
             container.classList.add('active');
             document.getElementById('progressFill').style.width = '0%';
             document.getElementById('progressPercent').textContent = '0%';
-            document.getElementById('progressStatus').textContent = 'Starting refresh...';
-            
+            document.getElementById('progressStatus').textContent = 'Triggering data refresh workflow...';
+
             try {{
-                const response = await fetch('/refresh-data', {{method: 'POST'}});
-                if (!response.ok) throw new Error('Failed to start refresh');
-                
-                updateProgress();
-                progressUpdateInterval = setInterval(updateProgress, 500);
+                await triggerWorkflow(token);
+                document.getElementById('progressStatus').textContent = 'Workflow triggered. Waiting for completion...';
+                document.getElementById('progressFill').style.width = '10%';
+                document.getElementById('progressPercent').textContent = '10%';
+
+                await pollWorkflowRun(token);
+
+                document.getElementById('progressFill').style.width = '100%';
+                document.getElementById('progressPercent').textContent = '100%';
+                document.getElementById('progressStatus').textContent = 'Refresh complete! Reloading page...';
+                setTimeout(() => location.reload(), 3000);
             }} catch (error) {{
                 document.getElementById('progressStatus').textContent = 'Error: ' + error.message;
                 btn.disabled = false;
                 refreshInProgress = false;
-                if (progressUpdateInterval) clearInterval(progressUpdateInterval);
             }}
         }}
-        
-        async function updateProgress() {{
+
+        async function updateLocalProgress() {{
             try {{
                 const response = await fetch('/progress');
                 const data = await response.json();

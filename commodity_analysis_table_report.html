@@ -316,7 +316,7 @@
         </table>
         
         <div class="timestamp">
-            Last updated: 2026-03-22T09:03:04.928251
+            Last updated: 2026-03-22T10:15:28.713927
         </div>
     </div>
     
@@ -369,42 +369,31 @@
         async function pollWorkflowRun(token) {
             const listUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/runs?per_page=1';
             const headers = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' };
-
-            // Wait a few seconds for the run to appear
             await new Promise(r => setTimeout(r, 4000));
-
-            for (let i = 0; i < 120; i++) { // poll up to ~10 minutes
+            for (let i = 0; i < 120; i++) {
                 const resp = await fetch(listUrl, { headers });
                 if (!resp.ok) throw new Error('Failed to check workflow status');
                 const data = await resp.json();
                 const run = data.workflow_runs && data.workflow_runs[0];
                 if (!run) { await new Promise(r => setTimeout(r, 5000)); continue; }
-
-                const status = run.status;
-                const conclusion = run.conclusion;
-
-                if (status === 'completed') {
-                    if (conclusion === 'success') return 'success';
-                    throw new Error('Workflow finished with: ' + conclusion);
+                if (run.status === 'completed') {
+                    if (run.conclusion === 'success') return 'success';
+                    throw new Error('Workflow finished with: ' + run.conclusion);
                 }
-
-                // Map steps to percentage
                 let pct = 10;
-                if (status === 'in_progress') pct = 50;
-                if (status === 'queued') pct = 5;
-
+                if (run.status === 'in_progress') pct = 50;
+                if (run.status === 'queued') pct = 5;
                 document.getElementById('progressFill').style.width = pct + '%';
                 document.getElementById('progressPercent').textContent = pct + '%';
-                document.getElementById('progressStatus').textContent = 'Workflow ' + status + '...';
-
+                document.getElementById('progressStatus').textContent = 'Workflow ' + run.status + '...';
                 await new Promise(r => setTimeout(r, 5000));
             }
             throw new Error('Workflow timed out');
         }
-        
+
         async function refreshData() {
             if (!isStaticHost) {
-                // Local server mode — original behavior
+                // Local server mode
                 if (refreshInProgress) return;
                 refreshInProgress = true;
                 const btn = document.getElementById('refreshBtn');
@@ -428,7 +417,7 @@
                 return;
             }
 
-            // GitHub Pages mode — trigger Actions workflow
+            // GitHub Pages mode
             if (refreshInProgress) return;
             let token = getGitHubToken();
             if (!token) { token = promptForToken(); if (!token) return; }
@@ -460,7 +449,7 @@
                 refreshInProgress = false;
             }
         }
-        
+
         async function updateLocalProgress() {
             try {
                 const response = await fetch('/progress');
