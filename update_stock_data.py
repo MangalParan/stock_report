@@ -13,6 +13,12 @@ import os
 import json
 import time
 import yfinance as yf
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+FUNDAMENTAL_FIELDS = [
+    'trailingPE', 'trailingEps', 'bookValue', 'dividendYield',
+    'marketCap', 'totalRevenue', 'profitMargins', 'returnOnEquity', 'debtToEquity'
+]
 
 PROGRESS_FILE = 'progress.json'
 
@@ -30,6 +36,19 @@ def save_progress(percentage, status, message):
             json.dump(progress, f)
     except Exception:
         pass
+
+
+def fetch_fundamentals_for_symbol(symbol):
+    """Fetch fundamental data for a single symbol via yfinance Ticker.info"""
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info or {}
+        fund = {}
+        for field in FUNDAMENTAL_FIELDS:
+            fund[field] = info.get(field)
+        return symbol, fund
+    except Exception:
+        return symbol, {field: None for field in FUNDAMENTAL_FIELDS}
 
 
 def update_stock_data():
@@ -68,7 +87,7 @@ def update_stock_data():
 
         for batch_num, chunk in enumerate(chunks, 1):
             try:
-                batch_progress = 5 + (batch_num / len(chunks)) * 85
+                batch_progress = 5 + (batch_num / len(chunks)) * 55
                 save_progress(int(batch_progress), "downloading",
                               f"Batch {batch_num}/{len(chunks)}: Downloading {len(chunk)} stocks...")
 
@@ -111,22 +130,47 @@ def update_stock_data():
                 print(f"Error: {str(e)[:80]}")
                 continue
 
+        # --- Phase 2: Fetch fundamental data ---
+        print(f"\nFetching fundamental data for {len(stock_data)} stocks...")
+        save_progress(62, "fundamentals", f"Starting fundamental data fetch for {len(stock_data)} stocks...")
+
+        fundamentals = {}
+        symbols_to_fetch = list(stock_data.keys())
+        total_fund = len(symbols_to_fetch)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(fetch_fundamentals_for_symbol, sym): sym for sym in symbols_to_fetch}
+            done_count = 0
+            for future in as_completed(futures):
+                sym, fund_data = future.result()
+                fundamentals[sym] = fund_data
+                done_count += 1
+                if done_count % 100 == 0 or done_count == total_fund:
+                    pct = 62 + int((done_count / total_fund) * 30)
+                    print(f"  Fundamentals: {done_count}/{total_fund}")
+                    save_progress(pct, "fundamentals",
+                                  f"Fundamentals: {done_count}/{total_fund} stocks")
+
+        print(f"Fundamental data fetched for {len(fundamentals)} stocks")
+
+        # --- Phase 3: Save ---
         print(f"\nSaving {len(stock_data)} stocks to market_data.pkl...")
         save_progress(95, "saving", f"Saving {len(stock_data)} stocks to disk...")
 
         payload = {
             "timestamp": datetime.now(),
-            "data": stock_data
+            "data": stock_data,
+            "fundamentals": fundamentals
         }
 
         with open('market_data.pkl', 'wb') as f:
             pickle.dump(payload, f)
 
-        print(f"SUCCESS: Updated market_data.pkl with {len(stock_data)} stocks")
+        print(f"SUCCESS: Updated market_data.pkl with {len(stock_data)} stocks + fundamentals")
         print(f"Timestamp: {payload['timestamp']}")
         print("="*70)
 
-        save_progress(100, "completed", f"Successfully saved {len(stock_data)} stocks")
+        save_progress(100, "completed", f"Successfully saved {len(stock_data)} stocks with fundamentals")
         return True
 
     except Exception as e:

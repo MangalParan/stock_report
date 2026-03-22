@@ -204,9 +204,133 @@ def get_sentiment(indicators):
     else:
         return 'NEUTRAL', bullish_score, bearish_score
 
-def analyze_all(market_data):
+
+def get_fundamental_score(fund_data):
+    """Score fundamental data and return (label, bull, bear)"""
+    if not fund_data:
+        return 'N/A', 0, 0
+
+    def to_float(val):
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    bull = 0
+    bear = 0
+
+    pe = to_float(fund_data.get('trailingPE'))
+    if pe is not None:
+        if 0 < pe <= 15:
+            bull += 2
+        elif 15 < pe <= 25:
+            bull += 1
+        elif pe > 40:
+            bear += 1
+        elif pe < 0:
+            bear += 2
+
+    eps = to_float(fund_data.get('trailingEps'))
+    if eps is not None:
+        if eps > 0:
+            bull += 1
+        elif eps < 0:
+            bear += 1
+
+    bv = to_float(fund_data.get('bookValue'))
+    if bv is not None and bv > 0:
+        bull += 0.5
+
+    dy = to_float(fund_data.get('dividendYield'))
+    if dy is not None:
+        if dy > 0.03:
+            bull += 1
+        elif dy > 0.01:
+            bull += 0.5
+
+    roe = to_float(fund_data.get('returnOnEquity'))
+    if roe is not None:
+        if roe > 0.15:
+            bull += 1.5
+        elif roe > 0.10:
+            bull += 0.5
+        elif roe < 0.05:
+            bear += 1
+
+    pm = to_float(fund_data.get('profitMargins'))
+    if pm is not None:
+        if pm > 0.15:
+            bull += 1
+        elif pm > 0.08:
+            bull += 0.5
+        elif pm < 0:
+            bear += 1
+
+    de = to_float(fund_data.get('debtToEquity'))
+    if de is not None:
+        if de < 50:
+            bull += 1
+        elif de > 150:
+            bear += 1
+        elif de > 300:
+            bear += 2
+
+    revenue = to_float(fund_data.get('totalRevenue'))
+    if revenue is not None and revenue > 0:
+        bull += 0.5
+
+    # Determine label
+    if bull > bear + 2:
+        label = 'STRONG'
+    elif bull > bear:
+        label = 'GOOD'
+    elif bear > bull:
+        label = 'WEAK'
+    else:
+        label = 'NEUTRAL'
+
+    # If no data was scored at all
+    has_any = any(fund_data.get(f) is not None for f in [
+        'trailingPE', 'trailingEps', 'returnOnEquity', 'profitMargins', 'debtToEquity'
+    ])
+    if not has_any:
+        return 'N/A', 0, 0
+
+    return label, bull, bear
+
+
+def get_overall_score(tech_bull, tech_bear, fund_bull, fund_bear, fund_label):
+    """Combine technical and fundamental into overall score"""
+    if fund_label == 'N/A':
+        # Only technical available
+        tech_max = 8
+        net = (tech_bull - tech_bear) / tech_max  # -1 to +1
+    else:
+        tech_max = 8
+        fund_max = 9
+        tech_norm = (tech_bull - tech_bear) / tech_max  # -1 to +1
+        fund_norm = (fund_bull - fund_bear) / fund_max
+        net = 0.5 * tech_norm + 0.5 * fund_norm
+
+    if net > 0.4:
+        return 'STRONG BUY'
+    elif net > 0.1:
+        return 'BUY'
+    elif net > -0.1:
+        return 'HOLD'
+    elif net > -0.4:
+        return 'SELL'
+    else:
+        return 'STRONG SELL'
+
+
+def analyze_all(market_data, fundamentals=None):
     """Analyze all stocks"""
     stocks_data = market_data['data']
+    if fundamentals is None:
+        fundamentals = {}
     results = []
     
     for idx, (symbol, df) in enumerate(stocks_data.items()):
@@ -221,6 +345,10 @@ def analyze_all(market_data):
             continue
         
         sentiment, bull_score, bear_score = get_sentiment(ind)
+
+        fund_data = fundamentals.get(symbol, {})
+        fund_label, fund_bull, fund_bear = get_fundamental_score(fund_data)
+        overall = get_overall_score(bull_score, bear_score, fund_bull, fund_bear, fund_label)
         
         results.append({
             'symbol': symbol,
@@ -228,6 +356,11 @@ def analyze_all(market_data):
             'bullish_score': bull_score,
             'bearish_score': bear_score,
             'indicators': ind,
+            'fund_data': fund_data if fund_data else {},
+            'fund_score': fund_label,
+            'fund_bull': fund_bull,
+            'fund_bear': fund_bear,
+            'overall_score': overall,
         })
     
     return results
@@ -305,7 +438,7 @@ def generate_html_table(results):
         table {
             width: 100%;
             border-collapse: collapse;
-            min-width: 2000px;
+            min-width: 3200px;
         }
         
         thead {
@@ -350,6 +483,20 @@ def generate_html_table(results):
         
         .num { text-align: right; font-family: 'Courier New', monospace; }
         
+        .badge-strong-buy { background: #1b5e20; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        .badge-buy { background: #4CAF50; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        .badge-hold { background: #ff9800; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        .badge-sell { background: #f44336; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        .badge-strong-sell { background: #b71c1c; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        
+        .badge-fund-strong { background: #1b5e20; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        .badge-fund-good { background: #66bb6a; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        .badge-fund-neutral { background: #ffa726; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        .badge-fund-weak { background: #ef5350; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        .badge-fund-na { background: #bdbdbd; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8em; }
+        
+        .na-val { color: #999; font-style: italic; }
+        
         .hidden { display: none; }
         
         .info-box {
@@ -379,6 +526,11 @@ def generate_html_table(results):
     bullish_count = sum(1 for r in results if r['sentiment'] == 'BULLISH')
     bearish_count = sum(1 for r in results if r['sentiment'] == 'BEARISH')
     neutral_count = sum(1 for r in results if r['sentiment'] == 'NEUTRAL')
+    strong_buy_count = sum(1 for r in results if r['overall_score'] == 'STRONG BUY')
+    buy_count = sum(1 for r in results if r['overall_score'] == 'BUY')
+    hold_count = sum(1 for r in results if r['overall_score'] == 'HOLD')
+    sell_count = sum(1 for r in results if r['overall_score'] == 'SELL')
+    strong_sell_count = sum(1 for r in results if r['overall_score'] == 'STRONG SELL')
     
     html_parts.append(f'''
     <div class="header">
@@ -405,6 +557,22 @@ def generate_html_table(results):
             <h3>Neutral</h3>
             <div class="value neutral">{neutral_count}</div>
         </div>
+        <div class="stat-box">
+            <h3>Strong Buy</h3>
+            <div class="value" style="color:#1b5e20">{strong_buy_count}</div>
+        </div>
+        <div class="stat-box">
+            <h3>Buy</h3>
+            <div class="value" style="color:#4CAF50">{buy_count}</div>
+        </div>
+        <div class="stat-box">
+            <h3>Hold</h3>
+            <div class="value" style="color:#ff9800">{hold_count}</div>
+        </div>
+        <div class="stat-box">
+            <h3>Sell</h3>
+            <div class="value" style="color:#f44336">{sell_count}</div>
+        </div>
     </div>
     
     <div class="info-box">
@@ -419,6 +587,10 @@ def generate_html_table(results):
             <input type="text" class="filter-input" id="filterRSI" placeholder="Filter RSI (e.g., >50, <30)...">
             <input type="text" class="filter-input" id="filterPrice" placeholder="Filter Price (e.g., >100, <500)...">
             <input type="text" class="filter-input" id="filterVol" placeholder="Filter Volume Trend (e.g., >1.5)...">
+            <input type="text" class="filter-input" id="filterPE" placeholder="Filter PE (e.g., <25)...">
+            <input type="text" class="filter-input" id="filterROE" placeholder="Filter ROE% (e.g., >15)...">
+            <input type="text" class="filter-input" id="filterDE" placeholder="Filter D/E (e.g., <100)...">
+            <input type="text" class="filter-input" id="filterOverall" placeholder="Filter Overall (STRONG BUY/BUY/HOLD/SELL)...">
             <button onclick="resetFilters()" style="padding: 8px 16px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Reset Filters</button>
             <button id="refreshBtn" onclick="startRefresh()" style="padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">🔄 Refresh Data</button>
         </div>
@@ -453,20 +625,64 @@ def generate_html_table(results):
                     <th onclick="sortTable(13)" class="num">ST Upper</th>
                     <th onclick="sortTable(14)" class="num">ST Lower</th>
                     <th onclick="sortTable(15)" class="num">Market Cap Proxy</th>
+                    <th onclick="sortTable(16)" class="num">PE Ratio</th>
+                    <th onclick="sortTable(17)" class="num">EPS</th>
+                    <th onclick="sortTable(18)" class="num">ROE %</th>
+                    <th onclick="sortTable(19)" class="num">D/E</th>
+                    <th onclick="sortTable(20)" class="num">Div Yield %</th>
+                    <th onclick="sortTable(21)" class="num">Profit Margin %</th>
+                    <th onclick="sortTable(22)" class="num">Fund Score</th>
+                    <th onclick="sortTable(23)" class="num">Overall</th>
                 </tr>
             </thead>
             <tbody id="tableBody">
     ''')
     
-    for stock in sorted(results, key=lambda x: (x['sentiment'] != 'BULLISH', -x['bullish_score'])):
+    for stock in sorted(results, key=lambda x: ({'STRONG BUY': 0, 'BUY': 1, 'HOLD': 2, 'SELL': 3, 'STRONG SELL': 4}.get(x['overall_score'], 2), x['sentiment'] != 'BULLISH', -x['bullish_score'])):
         ind = stock['indicators']
         sent_class = stock['sentiment'].lower()
+        fd = stock.get('fund_data', {})
         
         # Pre-calculate formatted values to avoid f-string issues
         ma20_val = f"₹{ind['ma20']:.2f}" if ind['ma20'] else 'N/A'
         ma50_val = f"₹{ind['ma50']:.2f}" if ind['ma50'] else 'N/A'
         ret5_class = 'positive' if ind['ret_5d'] >= 0 else 'negative'
         ret20_class = 'positive' if ind['ret_20d'] >= 0 else 'negative'
+
+        # Fundamental values - safe float conversion for yfinance data
+        def _ff(v):
+            if v is None: return None
+            try: return float(v)
+            except (ValueError, TypeError): return None
+
+        _pe = _ff(fd.get('trailingPE'))
+        _eps = _ff(fd.get('trailingEps'))
+        _roe = _ff(fd.get('returnOnEquity'))
+        _de = _ff(fd.get('debtToEquity'))
+        _dy = _ff(fd.get('dividendYield'))
+        _pm = _ff(fd.get('profitMargins'))
+
+        pe_val = f"{_pe:.1f}" if _pe is not None else 'N/A'
+        eps_val = f"₹{_eps:.2f}" if _eps is not None else 'N/A'
+        roe_val = f"{_roe*100:.1f}" if _roe is not None else 'N/A'
+        de_val = f"{_de:.1f}" if _de is not None else 'N/A'
+        dy_val = f"{_dy*100:.2f}" if _dy is not None else 'N/A'
+        pm_val = f"{_pm*100:.1f}" if _pm is not None else 'N/A'
+
+        pe_class = 'na-val' if _pe is None else ''
+        eps_class = 'na-val' if _eps is None else ('positive' if _eps > 0 else 'negative')
+        roe_class = 'na-val' if _roe is None else ('positive' if _roe > 0.10 else '')
+        de_class = 'na-val' if _de is None else ''
+        dy_class = 'na-val' if _dy is None else ''
+        pm_class = 'na-val' if _pm is None else ('positive' if _pm > 0 else 'negative')
+
+        # Fund score badge
+        fs = stock['fund_score']
+        fund_badge_class = {'STRONG': 'badge-fund-strong', 'GOOD': 'badge-fund-good', 'NEUTRAL': 'badge-fund-neutral', 'WEAK': 'badge-fund-weak'}.get(fs, 'badge-fund-na')
+
+        # Overall badge
+        ov = stock['overall_score']
+        overall_badge_class = {'STRONG BUY': 'badge-strong-buy', 'BUY': 'badge-buy', 'HOLD': 'badge-hold', 'SELL': 'badge-sell', 'STRONG SELL': 'badge-strong-sell'}.get(ov, 'badge-hold')
         
         html_parts.append(f'''
                 <tr class="data-row">
@@ -486,6 +702,14 @@ def generate_html_table(results):
                     <td class="num">₹{ind['st_upper']:.2f}</td>
                     <td class="num">₹{ind['st_lower']:.2f}</td>
                     <td class="num">{ind['market_cap_proxy']:.0f}</td>
+                    <td class="num {pe_class}">{pe_val}</td>
+                    <td class="num {eps_class}">{eps_val}</td>
+                    <td class="num {roe_class}">{roe_val}</td>
+                    <td class="num {de_class}">{de_val}</td>
+                    <td class="num {dy_class}">{dy_val}</td>
+                    <td class="num {pm_class}">{pm_val}</td>
+                    <td class="num"><span class="{fund_badge_class}">{fs}</span></td>
+                    <td class="num"><span class="{overall_badge_class}">{ov}</span></td>
                 </tr>
         ''')
     
@@ -514,6 +738,10 @@ def generate_html_table(results):
             document.getElementById('filterRSI').addEventListener('keyup', applyFilters);
             document.getElementById('filterPrice').addEventListener('keyup', applyFilters);
             document.getElementById('filterVol').addEventListener('keyup', applyFilters);
+            document.getElementById('filterPE').addEventListener('keyup', applyFilters);
+            document.getElementById('filterROE').addEventListener('keyup', applyFilters);
+            document.getElementById('filterDE').addEventListener('keyup', applyFilters);
+            document.getElementById('filterOverall').addEventListener('keyup', applyFilters);
         });
         
         function applyFilters() {
@@ -522,63 +750,44 @@ def generate_html_table(results):
             const filterRSI = document.getElementById('filterRSI').value;
             const filterPrice = document.getElementById('filterPrice').value;
             const filterVol = document.getElementById('filterVol').value;
+            const filterPE = document.getElementById('filterPE').value;
+            const filterROE = document.getElementById('filterROE').value;
+            const filterDE = document.getElementById('filterDE').value;
+            const filterOverall = document.getElementById('filterOverall').value.toUpperCase();
+            
+            function numericFilter(cellText, filterVal) {
+                const num = parseFloat(cellText.replace(/[^0-9.-]/g, ''));
+                if (cellText.trim() === 'N/A' || isNaN(num)) return false;
+                if (filterVal.includes('>')) {
+                    const val = parseFloat(filterVal.substring(1));
+                    return num > val;
+                } else if (filterVal.includes('<')) {
+                    const val = parseFloat(filterVal.substring(1));
+                    return num < val;
+                }
+                return true;
+            }
             
             let visibleCount = 0;
             
             allRows.forEach(row => {
                 let show = true;
                 
-                // Symbol filter
-                if (filterSymbol && !row.cells[0].textContent.includes(filterSymbol)) {
-                    show = false;
-                }
-                
-                // Sentiment filter
-                if (show && filterSentiment && !row.cells[1].textContent.includes(filterSentiment)) {
-                    show = false;
-                }
-                
-                // RSI filter
-                if (show && filterRSI) {
-                    const rsi = parseFloat(row.cells[7].textContent);
-                    if (filterRSI.includes('>')) {
-                        const val = parseFloat(filterRSI.substring(1));
-                        if (!(rsi > val)) show = false;
-                    } else if (filterRSI.includes('<')) {
-                        const val = parseFloat(filterRSI.substring(1));
-                        if (!(rsi < val)) show = false;
-                    }
-                }
-                
-                // Price filter
-                if (show && filterPrice) {
-                    const price = parseFloat(row.cells[4].textContent);
-                    if (filterPrice.includes('>')) {
-                        const val = parseFloat(filterPrice.substring(1));
-                        if (!(price > val)) show = false;
-                    } else if (filterPrice.includes('<')) {
-                        const val = parseFloat(filterPrice.substring(1));
-                        if (!(price < val)) show = false;
-                    }
-                }
-                
-                // Volume trend filter
-                if (show && filterVol) {
-                    const vol = parseFloat(row.cells[11].textContent);
-                    if (filterVol.includes('>')) {
-                        const val = parseFloat(filterVol.substring(1));
-                        if (!(vol > val)) show = false;
-                    } else if (filterVol.includes('<')) {
-                        const val = parseFloat(filterVol.substring(1));
-                        if (!(vol < val)) show = false;
-                    }
-                }
+                if (filterSymbol && !row.cells[0].textContent.includes(filterSymbol)) show = false;
+                if (show && filterSentiment && !row.cells[1].textContent.includes(filterSentiment)) show = false;
+                if (show && filterRSI && !numericFilter(row.cells[7].textContent, filterRSI)) show = false;
+                if (show && filterPrice && !numericFilter(row.cells[4].textContent, filterPrice)) show = false;
+                if (show && filterVol && !numericFilter(row.cells[11].textContent, filterVol)) show = false;
+                if (show && filterPE && !numericFilter(row.cells[16].textContent, filterPE)) show = false;
+                if (show && filterROE && !numericFilter(row.cells[18].textContent, filterROE)) show = false;
+                if (show && filterDE && !numericFilter(row.cells[19].textContent, filterDE)) show = false;
+                if (show && filterOverall && !row.cells[23].textContent.toUpperCase().includes(filterOverall)) show = false;
                 
                 row.style.display = show ? '' : 'none';
                 if (show) visibleCount++;
             });
             
-            document.title = `Stocks: ${visibleCount}/${allRows.length}`;
+            document.title = 'Stocks: ' + visibleCount + '/' + allRows.length;
         }
         
         function sortTable(columnIndex) {
@@ -595,6 +804,13 @@ def generate_html_table(results):
             rows.sort((a, b) => {
                 let aVal = a.cells[columnIndex].textContent.trim();
                 let bVal = b.cells[columnIndex].textContent.trim();
+                
+                // N/A always sorts to bottom
+                const aNA = aVal === 'N/A';
+                const bNA = bVal === 'N/A';
+                if (aNA && bNA) return 0;
+                if (aNA) return 1;
+                if (bNA) return -1;
                 
                 // Try numeric comparison
                 const aNum = parseFloat(aVal.replace(/[^0-9.-]/g, ''));
@@ -619,6 +835,10 @@ def generate_html_table(results):
             document.getElementById('filterRSI').value = '';
             document.getElementById('filterPrice').value = '';
             document.getElementById('filterVol').value = '';
+            document.getElementById('filterPE').value = '';
+            document.getElementById('filterROE').value = '';
+            document.getElementById('filterDE').value = '';
+            document.getElementById('filterOverall').value = '';
             applyFilters();
         }
         
@@ -854,8 +1074,9 @@ def main():
     with open('market_data.pkl', 'rb') as f:
         market_data = pickle.load(f)
     
-    print(f"Analyzing {len(market_data['data'])} stocks...")
-    results = analyze_all(market_data)
+    fundamentals = market_data.get('fundamentals', {})
+    print(f"Analyzing {len(market_data['data'])} stocks (fundamentals available for {len(fundamentals)})...")
+    results = analyze_all(market_data, fundamentals)
     
     print(f"\nStocks analyzed: {len(results)}")
     bullish = sum(1 for r in results if r['sentiment'] == 'BULLISH')
@@ -872,11 +1093,24 @@ def main():
     print("[OK] Saved: stock_analysis_table_report.html")
     
     # Save JSON with all data
+    strong_buy = sum(1 for r in results if r['overall_score'] == 'STRONG BUY')
+    buy = sum(1 for r in results if r['overall_score'] == 'BUY')
+    hold = sum(1 for r in results if r['overall_score'] == 'HOLD')
+    sell = sum(1 for r in results if r['overall_score'] == 'SELL')
+    strong_sell = sum(1 for r in results if r['overall_score'] == 'STRONG SELL')
+
     json_data = {
         'timestamp': datetime.now(IST).strftime('%d-%b-%Y %I:%M:%S %p IST'),
         'total_analyzed': len(results),
         'bullish_count': bullish,
         'bearish_count': bearish,
+        'overall_counts': {
+            'strong_buy': strong_buy,
+            'buy': buy,
+            'hold': hold,
+            'sell': sell,
+            'strong_sell': strong_sell,
+        },
         'stocks': [
             {
                 'symbol': r['symbol'],
@@ -895,6 +1129,14 @@ def main():
                 'st_upper': r['indicators']['st_upper'],
                 'st_lower': r['indicators']['st_lower'],
                 'market_cap_proxy': r['indicators']['market_cap_proxy'],
+                'pe': r.get('fund_data', {}).get('trailingPE'),
+                'eps': r.get('fund_data', {}).get('trailingEps'),
+                'roe': r.get('fund_data', {}).get('returnOnEquity'),
+                'debt_to_equity': r.get('fund_data', {}).get('debtToEquity'),
+                'dividend_yield': r.get('fund_data', {}).get('dividendYield'),
+                'profit_margin': r.get('fund_data', {}).get('profitMargins'),
+                'fund_score': r['fund_score'],
+                'overall_score': r['overall_score'],
             }
             for r in results
         ]
@@ -909,9 +1151,10 @@ def main():
     print("="*70)
     print(f"Features:")
     print(f"  [OK] All {len(results)} stocks in interactive table")
-    print(f"  [OK] 16 columns with complete indicators")
-    print(f"  [OK] Real-time filtering on 5 key columns")
+    print(f"  [OK] 24 columns with technical + fundamental indicators")
+    print(f"  [OK] Real-time filtering on 9 key columns")
     print(f"  [OK] Click headers to sort any column")
+    print(f"  [OK] Technical Score + Fundamental Score + Overall Score")
     print(f"  [OK] Supertrend (Upper/Lower Bands)")
     print(f"  [OK] VWAP (Volume Weighted Average Price)")
     print(f"  [OK] Responsive design")
