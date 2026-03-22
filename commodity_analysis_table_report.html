@@ -369,26 +369,55 @@
             throw new Error(err.message || 'Failed to trigger workflow (HTTP ' + resp.status + ')');
         }
 
-        async function pollWorkflowRun(token) {
-            const listUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/runs?per_page=1';
+        async function waitForNewRun(token, triggerTime) {
+            const listUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/runs?per_page=5';
             const headers = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' };
-            await new Promise(r => setTimeout(r, 4000));
-            for (let i = 0; i < 120; i++) {
+            for (let i = 0; i < 30; i++) {
+                await new Promise(r => setTimeout(r, 3000));
                 const resp = await fetch(listUrl, { headers });
-                if (!resp.ok) throw new Error('Failed to check workflow status');
+                if (!resp.ok) continue;
                 const data = await resp.json();
-                const run = data.workflow_runs && data.workflow_runs[0];
-                if (!run) { await new Promise(r => setTimeout(r, 5000)); continue; }
+                const runs = data.workflow_runs || [];
+                const newRun = runs.find(r => new Date(r.created_at).getTime() >= triggerTime);
+                if (newRun) return newRun.id;
+                document.getElementById('progressFill').style.width = '5%';
+                document.getElementById('progressPercent').textContent = '5%';
+                document.getElementById('progressStatus').textContent = 'Waiting for workflow to start...';
+            }
+            throw new Error('Workflow did not start. Check GitHub Actions.');
+        }
+
+        async function pollRunProgress(token, runId) {
+            const runUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/runs/' + runId;
+            const jobsUrl = runUrl + '/jobs';
+            const headers = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' };
+            for (let i = 0; i < 180; i++) {
+                const resp = await fetch(runUrl, { headers });
+                if (!resp.ok) throw new Error('Failed to check run status');
+                const run = await resp.json();
                 if (run.status === 'completed') {
-                    if (run.conclusion === 'success') return 'success';
-                    throw new Error('Workflow finished with: ' + run.conclusion);
+                    if (run.conclusion === 'success') return;
+                    throw new Error('Workflow failed: ' + run.conclusion);
                 }
                 let pct = 10;
-                if (run.status === 'in_progress') pct = 50;
-                if (run.status === 'queued') pct = 5;
+                let msg = 'Workflow ' + run.status + '...';
+                try {
+                    const jResp = await fetch(jobsUrl, { headers });
+                    if (jResp.ok) {
+                        const jData = await jResp.json();
+                        const job = jData.jobs && jData.jobs[0];
+                        if (job && job.steps && job.steps.length) {
+                            const total = job.steps.length;
+                            const done = job.steps.filter(s => s.status === 'completed').length;
+                            const current = job.steps.find(s => s.status === 'in_progress');
+                            pct = Math.min(95, Math.round((done / total) * 100));
+                            if (current) msg = '⚙️ ' + current.name;
+                        }
+                    }
+                } catch (e) { /* use defaults */ }
                 document.getElementById('progressFill').style.width = pct + '%';
                 document.getElementById('progressPercent').textContent = pct + '%';
-                document.getElementById('progressStatus').textContent = 'Workflow ' + run.status + '...';
+                document.getElementById('progressStatus').textContent = msg;
                 await new Promise(r => setTimeout(r, 5000));
             }
             throw new Error('Workflow timed out');
@@ -435,12 +464,18 @@
             document.getElementById('progressStatus').textContent = 'Triggering data refresh workflow...';
 
             try {
+                const triggerTime = Date.now() - 30000;
                 await triggerWorkflow(token);
-                document.getElementById('progressStatus').textContent = 'Workflow triggered. Waiting for completion...';
+                document.getElementById('progressStatus').textContent = 'Workflow dispatched. Waiting for run to start...';
+                document.getElementById('progressFill').style.width = '5%';
+                document.getElementById('progressPercent').textContent = '5%';
+
+                const runId = await waitForNewRun(token, triggerTime);
+                document.getElementById('progressStatus').textContent = 'Workflow started. Tracking progress...';
                 document.getElementById('progressFill').style.width = '10%';
                 document.getElementById('progressPercent').textContent = '10%';
 
-                await pollWorkflowRun(token);
+                await pollRunProgress(token, runId);
 
                 document.getElementById('progressFill').style.width = '100%';
                 document.getElementById('progressPercent').textContent = '100%';

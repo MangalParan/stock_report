@@ -810,22 +810,51 @@
             throw new Error(err.message || 'Failed to trigger workflow (HTTP ' + resp.status + ')');
         }
 
-        async function pollWorkflowRun(token) {
-            const listUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/runs?per_page=1';
+        async function waitForNewRun(token, triggerTime) {
+            const listUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/runs?per_page=5';
             const headers = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' };
-            await new Promise(r => setTimeout(r, 4000));
-            for (let i = 0; i < 120; i++) {
+            for (let i = 0; i < 30; i++) {
+                await new Promise(r => setTimeout(r, 3000));
                 const resp = await fetch(listUrl, { headers });
-                if (!resp.ok) throw new Error('Failed to check workflow status');
+                if (!resp.ok) continue;
                 const data = await resp.json();
-                const run = data.workflow_runs && data.workflow_runs[0];
-                if (!run) { await new Promise(r => setTimeout(r, 5000)); continue; }
+                const runs = data.workflow_runs || [];
+                const newRun = runs.find(r => new Date(r.created_at).getTime() >= triggerTime);
+                if (newRun) return newRun.id;
+                showProgress(5, 'processing', 'Waiting for workflow to start...');
+            }
+            throw new Error('Workflow did not start. Check GitHub Actions.');
+        }
+
+        async function pollRunProgress(token, runId) {
+            const runUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/runs/' + runId;
+            const jobsUrl = runUrl + '/jobs';
+            const headers = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' };
+            for (let i = 0; i < 180; i++) {
+                const resp = await fetch(runUrl, { headers });
+                if (!resp.ok) throw new Error('Failed to check run status');
+                const run = await resp.json();
                 if (run.status === 'completed') {
-                    if (run.conclusion === 'success') return 'success';
-                    throw new Error('Workflow finished with: ' + run.conclusion);
+                    if (run.conclusion === 'success') return;
+                    throw new Error('Workflow failed: ' + run.conclusion);
                 }
-                let pct = run.status === 'in_progress' ? 50 : 5;
-                showProgress(pct, 'processing', 'Workflow ' + run.status + '...');
+                let pct = 10;
+                let msg = 'Workflow ' + run.status + '...';
+                try {
+                    const jResp = await fetch(jobsUrl, { headers });
+                    if (jResp.ok) {
+                        const jData = await jResp.json();
+                        const job = jData.jobs && jData.jobs[0];
+                        if (job && job.steps && job.steps.length) {
+                            const total = job.steps.length;
+                            const done = job.steps.filter(s => s.status === 'completed').length;
+                            const current = job.steps.find(s => s.status === 'in_progress');
+                            pct = Math.min(95, Math.round((done / total) * 100));
+                            if (current) msg = '⚙️ ' + current.name;
+                        }
+                    }
+                } catch (e) { /* use defaults */ }
+                showProgress(pct, 'processing', msg);
                 await new Promise(r => setTimeout(r, 5000));
             }
             throw new Error('Workflow timed out');
@@ -874,9 +903,12 @@
             showProgress(0, 'processing', 'Triggering data refresh workflow...');
 
             try {
+                const triggerTime = Date.now() - 30000;
                 await triggerWorkflow(token);
-                showProgress(10, 'processing', 'Workflow triggered. Waiting for completion...');
-                await pollWorkflowRun(token);
+                showProgress(5, 'processing', 'Workflow dispatched. Waiting for run to start...');
+                const runId = await waitForNewRun(token, triggerTime);
+                showProgress(10, 'processing', 'Workflow started. Tracking progress...');
+                await pollRunProgress(token, runId);
                 showProgress(100, 'completed', 'Refresh complete! Reloading page...');
                 setTimeout(() => { window.location.href = window.location.pathname + '?t=' + Date.now(); }, 3000);
             } catch (error) {
