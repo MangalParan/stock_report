@@ -772,11 +772,11 @@
         const WORKFLOW_FILE = 'refresh-stock-data.yml';
         let refreshInProgress = false;
 
-        function getGitHubToken() {{
+        function getGitHubToken() {
             return localStorage.getItem('gh_pat') || '';
-        }}
+        }
 
-        function promptForToken() {{
+        function promptForToken() {
             const token = prompt(
                 'Enter your GitHub Personal Access Token (PAT) with "Actions: write" permission.\n\n' +
                 'Create one at: https://github.com/settings/tokens?type=beta\n' +
@@ -784,55 +784,55 @@
                 'Permission needed: Actions → Read and write\n\n' +
                 'The token is stored only in your browser (localStorage).'
             );
-            if (token && token.trim()) {{
+            if (token && token.trim()) {
                 localStorage.setItem('gh_pat', token.trim());
                 return token.trim();
-            }}
+            }
             return null;
-        }}
+        }
 
-        async function triggerWorkflow(token) {{
+        async function triggerWorkflow(token) {
             const url = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/dispatches';
-            const resp = await fetch(url, {{
+            const resp = await fetch(url, {
                 method: 'POST',
-                headers: {{
+                headers: {
                     'Authorization': 'Bearer ' + token,
                     'Accept': 'application/vnd.github+json'
-                }},
-                body: JSON.stringify({{ ref: 'main' }})
-            }});
+                },
+                body: JSON.stringify({ ref: 'main' })
+            });
             if (resp.status === 204) return true;
-            if (resp.status === 401 || resp.status === 403) {{
+            if (resp.status === 401 || resp.status === 403) {
                 localStorage.removeItem('gh_pat');
                 throw new Error('Invalid or expired token. Please try again.');
-            }}
-            const err = await resp.json().catch(() => ({{}}));
+            }
+            const err = await resp.json().catch(() => ({}));
             throw new Error(err.message || 'Failed to trigger workflow (HTTP ' + resp.status + ')');
-        }}
+        }
 
-        async function pollWorkflowRun(token) {{
+        async function pollWorkflowRun(token) {
             const listUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/actions/workflows/' + WORKFLOW_FILE + '/runs?per_page=1';
-            const headers = {{ 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' }};
+            const headers = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' };
             await new Promise(r => setTimeout(r, 4000));
-            for (let i = 0; i < 120; i++) {{
-                const resp = await fetch(listUrl, {{ headers }});
+            for (let i = 0; i < 120; i++) {
+                const resp = await fetch(listUrl, { headers });
                 if (!resp.ok) throw new Error('Failed to check workflow status');
                 const data = await resp.json();
                 const run = data.workflow_runs && data.workflow_runs[0];
-                if (!run) {{ await new Promise(r => setTimeout(r, 5000)); continue; }}
-                if (run.status === 'completed') {{
+                if (!run) { await new Promise(r => setTimeout(r, 5000)); continue; }
+                if (run.status === 'completed') {
                     if (run.conclusion === 'success') return 'success';
                     throw new Error('Workflow finished with: ' + run.conclusion);
-                }}
+                }
                 let pct = run.status === 'in_progress' ? 50 : 5;
                 showProgress(pct, 'processing', 'Workflow ' + run.status + '...');
                 await new Promise(r => setTimeout(r, 5000));
-            }}
+            }
             throw new Error('Workflow timed out');
-        }}
+        }
 
-        async function startRefresh() {{
-            if (!isStaticHost) {{
+        async function startRefresh() {
+            if (!isStaticHost) {
                 // Local server mode
                 if (refreshInProgress) return;
                 refreshInProgress = true;
@@ -841,29 +841,29 @@
                 refreshBtn.disabled = true;
                 refreshBtn.style.opacity = '0.6';
                 progressContainer.style.display = 'block';
-                try {{
-                    const response = await fetch('/refresh-data', {{method: 'POST'}});
+                try {
+                    const response = await fetch('/refresh-data', {method: 'POST'});
                     const result = await response.json();
-                    if (result.status !== 'success') {{
+                    if (result.status !== 'success') {
                         showProgress(0, 'error', 'Error: ' + result.message);
                         refreshInProgress = false;
                         return;
-                    }}
+                    }
                     await trackLocalProgress();
-                }} catch (error) {{
+                } catch (error) {
                     showProgress(0, 'error', 'Failed to start refresh: ' + error.message);
-                }} finally {{
+                } finally {
                     refreshBtn.disabled = false;
                     refreshBtn.style.opacity = '1';
                     refreshInProgress = false;
-                }}
+                }
                 return;
-            }}
+            }
 
             // GitHub Pages mode
             if (refreshInProgress) return;
             let token = getGitHubToken();
-            if (!token) {{ token = promptForToken(); if (!token) return; }}
+            if (!token) { token = promptForToken(); if (!token) return; }
 
             refreshInProgress = true;
             const refreshBtn = document.getElementById('refreshBtn');
@@ -873,53 +873,53 @@
             progressContainer.style.display = 'block';
             showProgress(0, 'processing', 'Triggering data refresh workflow...');
 
-            try {{
+            try {
                 await triggerWorkflow(token);
                 showProgress(10, 'processing', 'Workflow triggered. Waiting for completion...');
                 await pollWorkflowRun(token);
                 showProgress(100, 'completed', 'Refresh complete! Reloading page...');
-                setTimeout(() => {{ window.location.href = window.location.pathname + '?t=' + Date.now(); }}, 3000);
-            }} catch (error) {{
+                setTimeout(() => { window.location.href = window.location.pathname + '?t=' + Date.now(); }, 3000);
+            } catch (error) {
                 showProgress(0, 'error', 'Error: ' + error.message);
                 refreshBtn.disabled = false;
                 refreshBtn.style.opacity = '1';
                 refreshInProgress = false;
-            }}
-        }}
+            }
+        }
         
-        async function trackLocalProgress() {{
+        async function trackLocalProgress() {
             const maxAttempts = 300;
             let attempts = 0;
             
-            while (attempts < maxAttempts) {{
-                try {{
+            while (attempts < maxAttempts) {
+                try {
                     const response = await fetch('/progress');
                     const progress = await response.json();
                     
                     const pct = progress.percentage || 0;
                     showProgress(pct, progress.status || 'processing', progress.message || '');
                     
-                    if (progress.status === 'completed' || progress.status === 'error') {{
-                        if (progress.status === 'completed') {{
-                            setTimeout(() => {{
+                    if (progress.status === 'completed' || progress.status === 'error') {
+                        if (progress.status === 'completed') {
+                            setTimeout(() => {
                                 location.reload();
-                            }}, 2000);
-                        }}
+                            }, 2000);
+                        }
                         return;
-                    }}
+                    }
                     
                     await new Promise(resolve => setTimeout(resolve, 500));
                     attempts++;
                     
-                }} catch (error) {{
+                } catch (error) {
                     console.error('Error tracking progress:', error);
                     await new Promise(resolve => setTimeout(resolve, 1000));
                     attempts++;
-                }}
-            }}
+                }
+            }
             
             showProgress(0, 'error', 'Update timeout - please check server');
-        }}
+        }
         
         function showProgress(percentage, status, message) {
             const progressPercent = document.getElementById('progressPercent');
