@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Update Stock Market Data
-Downloads OHLCV data from Yahoo Finance for NSE stocks listed in symbols.csv
+Downloads OHLCV data from Yahoo Finance for NSE stocks listed in EQUITY_L.csv
 Saves to market_data.pkl with progress tracking via progress.json
 """
 
@@ -11,6 +11,7 @@ import numpy as np
 from datetime import datetime
 import os
 import json
+import time
 import yfinance as yf
 
 PROGRESS_FILE = 'progress.json'
@@ -38,20 +39,22 @@ def update_stock_data():
     print("="*70)
 
     try:
-        save_progress(0, "initializing", "Loading stock symbol list...")
+        save_progress(0, "initializing", "Loading stock symbol list from EQUITY_L.csv...")
 
-        if not os.path.exists('symbols.csv'):
-            print("ERROR: symbols.csv not found")
-            save_progress(0, "error", "symbols.csv not found")
+        if not os.path.exists('EQUITY_L.csv'):
+            print("ERROR: EQUITY_L.csv not found")
+            save_progress(0, "error", "EQUITY_L.csv not found")
             return False
 
-        with open('symbols.csv', 'r') as f:
-            symbols = [line.strip() for line in f if line.strip()]
+        # Read EQUITY_L.csv and extract SYMBOL column, append .NS for yfinance
+        equity_df = pd.read_csv('EQUITY_L.csv')
+        raw_symbols = equity_df['SYMBOL'].dropna().unique().tolist()
+        symbols = [s.strip() + '.NS' for s in raw_symbols if isinstance(s, str) and s.strip()]
 
-        print(f"\nLoaded {len(symbols)} stock symbols from symbols.csv")
+        print(f"\nLoaded {len(symbols)} stock symbols from EQUITY_L.csv")
 
         if not symbols:
-            save_progress(0, "error", "No symbols found in symbols.csv")
+            save_progress(0, "error", "No symbols found in EQUITY_L.csv")
             return False
 
         stock_data = {}
@@ -59,7 +62,7 @@ def update_stock_data():
         chunks = [symbols[i:i + BATCH_SIZE] for i in range(0, len(symbols), BATCH_SIZE)]
 
         print(f"Downloading data for {len(symbols)} stocks in {len(chunks)} batches")
-        print("This may take a few minutes...\n")
+        print("This may take 5-15 minutes...\n")
 
         save_progress(5, "downloading", f"Starting download of {len(symbols)} stocks in {len(chunks)} batches")
 
@@ -99,6 +102,10 @@ def update_stock_data():
                                 batch_count += 1
 
                 print(f"Saved {batch_count} stocks")
+
+                # Small delay between batches to avoid rate limiting
+                if batch_num < len(chunks):
+                    time.sleep(1)
 
             except Exception as e:
                 print(f"Error: {str(e)[:80]}")
