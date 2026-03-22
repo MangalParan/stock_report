@@ -1,0 +1,9 @@
+Commodity_Name,MCX_Symbol,Lot_Size,Unit,Category,Description
+Gold,GOLD,100,grams,Precious Metals,Gold futures - primary precious metal contract
+Silver,SILVER,30,kg,Precious Metals,Silver futures - secondary precious metal contract
+Crude Oil,CRUDEOIL,100,barrels,Energy,Indian crude oil benchmark
+Natural Gas,NATURALGAS,1000,MMBtu,Energy,Natural gas futures contract
+Copper,COPPER,1000,kg,Industrial Metals,Copper futures for industrial use
+Zinc,ZINC,25000,kg,Industrial Metals,Zinc futures contract
+Lead,LEAD,25000,kg,Industrial Metals,Lead futures contract
+Nickel,NICKEL,1000,kg,Industrial Metals,Nickel futures for stainless steel

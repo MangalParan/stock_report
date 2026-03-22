@@ -1,0 +1,36 @@
+name: Refresh Market Data
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas numpy yfinance
+
+      - name: Fetch commodity data
+        run: python update_data.py
+
+      - name: Generate commodity report
+        run: python commodity_bullish_bearish_table_report.py
+
+      - name: Commit and push updated reports
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add commodity_analysis_table_report.html commodity_analysis_table_report.json commodity_market_data.pkl
+          git diff --cached --quiet || git commit -m "Auto-refresh commodity data $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push
