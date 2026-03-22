@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Commodity Market Analysis Report</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -442,7 +445,7 @@
                 document.getElementById('progressFill').style.width = '100%';
                 document.getElementById('progressPercent').textContent = '100%';
                 document.getElementById('progressStatus').textContent = 'Refresh complete! Reloading page...';
-                setTimeout(() => location.reload(), 3000);
+                setTimeout(() => { window.location.href = window.location.pathname + '?t=' + Date.now(); }, 3000);
             } catch (error) {
                 document.getElementById('progressStatus').textContent = 'Error: ' + error.message;
                 btn.disabled = false;
